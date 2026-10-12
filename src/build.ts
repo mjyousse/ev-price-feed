@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { toStation, type NrelStation } from "./transform.ts";
 import { snapshot, diffSnapshots, type Snapshot } from "./history.ts";
 import { PUBLISHED_TARIFFS } from "./tariffs.ts";
+import { applyIonnaPrices, fetchIonnaSites, IONNA_LOCATOR_URL } from "./ionna.ts";
 import type { Station } from "./types.ts";
 
 const NREL_URL = "https://developer.nlr.gov/api/alt-fuel-stations/v1.json";
@@ -26,13 +27,14 @@ async function fetchNrel(apiKey: string): Promise<NrelStation[]> {
 }
 
 function summarize(stations: Station[]) {
-  const byNetwork: Record<string, { stations: number; priced: number; nrel: number; published: number; tesla_only: number }> = {};
+  const byNetwork: Record<string, { stations: number; priced: number; nrel: number; published: number; network_site: number; tesla_only: number }> = {};
   for (const s of stations) {
-    const n = (byNetwork[s.network] ??= { stations: 0, priced: 0, nrel: 0, published: 0, tesla_only: 0 });
+    const n = (byNetwork[s.network] ??= { stations: 0, priced: 0, nrel: 0, published: 0, network_site: 0, tesla_only: 0 });
     n.stations++;
     if (s.price_source !== "none") n.priced++;
     if (s.price_source === "nrel") n.nrel++;
     if (s.price_source === "published") n.published++;
+    if (s.price_source === "network_site") n.network_site++;
     if (s.open_to_non_tesla === false) n.tesla_only++;
   }
   return byNetwork;
@@ -51,6 +53,9 @@ async function main() {
   const today = fetchedAt.slice(0, 10);
   const raw = await fetchNrel(key);
   const stations = raw.filter((s) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude)).map((s) => toStation(s, fetchedAt));
+  const ionnaSites = await fetchIonnaSites();
+  const ionnaMatched = applyIonnaPrices(stations, ionnaSites, today);
+  console.log(`IONNA locator: ${ionnaSites.length} sites, ${ionnaMatched} NREL stations matched`);
   stations.sort((a, b) => a.state.localeCompare(b.state) || a.nrel_id - b.nrel_id);
 
   await mkdir(join(OUT, "states"), { recursive: true });
@@ -65,6 +70,7 @@ async function main() {
     networks: summarize(stations),
     sources: {
       stations: "NREL Alternative Fuels Data Center (developer.nlr.gov), public DC fast stations",
+      network_sites: [IONNA_LOCATOR_URL],
       published_tariffs: [...new Set(PUBLISHED_TARIFFS.map((t) => t.source_url))],
     },
   };

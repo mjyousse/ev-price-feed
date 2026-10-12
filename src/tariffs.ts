@@ -3,7 +3,8 @@ import type { Station, TimeOfDayRate } from "./types.ts";
 /**
  * Prices that networks publish themselves on official pages. These are entered by hand from the
  * cited page (no automated fetching of the network's site) and re-checked when verified_on gets old.
- * They are only applied where NREL has no station-level price.
+ * They are only applied where NREL has no station-level price. For IONNA the entry below is the
+ * fallback for stations not matched to the locator page (see ionna.ts).
  */
 export interface PublishedTariff {
   network: string;

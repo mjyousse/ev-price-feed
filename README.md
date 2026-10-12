@@ -51,7 +51,7 @@ The feed refreshes every day at 09:17 UTC and can be run manually from the Actio
   ],
   "free": false,
   "currency": "USD",
-  "price_source": "published",      // "nrel" | "published" | "none"
+  "price_source": "published",      // "nrel" | "published" | "network_site" | "none"
   "price_note": "...",
   "pricing_text": null,             // original NREL pricing text
   "source_url": "https://...",
@@ -69,7 +69,8 @@ the final word.
 | Source | How it is used |
 | --- | --- |
 | [NREL Alternative Fuels Data Center](https://developer.nlr.gov/docs/transportation/alt-fuel-stations-v1/) | All public DC fast stations, ports, connectors, power, hours, access notes and station-level pricing text. Official open data API. |
-| [IONNA pricing](https://www.ionna.com/blog/public-ev-charging-prices/) | Published network-wide maximum of $0.39/kWh, used where NREL has no price. |
+| [IONNA station locator](https://www.ionna.com/rechargeries/find-a-rechargery/) | Per-station price posted on the public locator, fetched once per run (honours robots.txt crawl-delay) and matched to NREL stations within 150 m. Overrides NREL text for IONNA. |
+| [IONNA pricing](https://www.ionna.com/blog/public-ev-charging-prices/) | Published network-wide maximum of $0.39/kWh, fallback for IONNA stations not matched on the locator. |
 | [Mercedes-Benz HPC Power Hours](https://mercedesbenzhpc.com/power-hours/) | Published off-peak rates and hours per location. |
 
 Published tariffs live in [`src/tariffs.ts`](src/tariffs.ts) with the page they came from
