@@ -1,13 +1,15 @@
 import type { Station } from "./types.ts";
 
-/** Compact daily snapshot: station_ref -> [price_per_kwh, per_minute, off_peak_price] */
-export type Snapshot = Record<string, [number | null, number | null, number | null]>;
+/** Compact daily snapshot: station_ref -> [price_per_kwh, per_minute, off_peak_price, note?]. The note keeps posted price text (time of use, "last updated") for network_site prices. */
+export type Snapshot = Record<string, [number | null, number | null, number | null] | [number | null, number | null, number | null, string]>;
 
 export function snapshot(stations: Station[]): Snapshot {
   const out: Snapshot = {};
   for (const s of stations) {
     if (s.price_source === "none") continue;
-    out[s.station_ref] = [s.price_per_kwh, s.per_minute, s.off_peak_price];
+    out[s.station_ref] = s.price_source === "network_site" && s.price_note
+      ? [s.price_per_kwh, s.per_minute, s.off_peak_price, s.price_note]
+      : [s.price_per_kwh, s.per_minute, s.off_peak_price];
   }
   return out;
 }

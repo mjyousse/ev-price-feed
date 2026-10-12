@@ -18,8 +18,8 @@ export interface Pricing {
   time_of_day: TimeOfDayRate[];
   free: boolean;
   currency: "USD";
-  /** "nrel" = station-level text from NREL; "published" = network's own published tariff; "none" */
-  price_source: "nrel" | "published" | "none";
+  /** "nrel" = station-level text from NREL; "published" = network's own published tariff; "network_site" = per-station price posted on the network's public locator; "none" */
+  price_source: "nrel" | "published" | "network_site" | "none";
   price_note: string | null;
   source_url: string | null;
   verified_on: string | null;
