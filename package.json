@@ -1,0 +1,15 @@
+{
+  "name": "ev-price-feed",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Daily public DC fast charging price and station feed for the US",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build-feed": "tsx src/build.ts",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": { "node": ">=20" },
+  "devDependencies": { "tsx": "^4.19.0", "typescript": "^5.6.0", "@types/node": "^22.0.0" }
+}
