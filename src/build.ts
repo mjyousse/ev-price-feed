@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { toStation, type NrelStation } from "./transform.ts";
 import { snapshot, diffSnapshots, type Snapshot } from "./history.ts";
 import { PUBLISHED_TARIFFS } from "./tariffs.ts";
+import { applyDcfc, collectDcfc, DCFC_BASE } from "./dcfctracker.ts";
 import { applyIonnaPrices, fetchIonnaSites, IONNA_LOCATOR_URL } from "./ionna.ts";
 import type { Station } from "./types.ts";
 
@@ -27,14 +28,15 @@ async function fetchNrel(apiKey: string): Promise<NrelStation[]> {
 }
 
 function summarize(stations: Station[]) {
-  const byNetwork: Record<string, { stations: number; priced: number; nrel: number; published: number; network_site: number; tesla_only: number }> = {};
+  const byNetwork: Record<string, { stations: number; priced: number; nrel: number; published: number; network_site: number; dcfctracker: number; tesla_only: number }> = {};
   for (const s of stations) {
-    const n = (byNetwork[s.network] ??= { stations: 0, priced: 0, nrel: 0, published: 0, network_site: 0, tesla_only: 0 });
+    const n = (byNetwork[s.network] ??= { stations: 0, priced: 0, nrel: 0, published: 0, network_site: 0, dcfctracker: 0, tesla_only: 0 });
     n.stations++;
     if (s.price_source !== "none") n.priced++;
     if (s.price_source === "nrel") n.nrel++;
     if (s.price_source === "published") n.published++;
     if (s.price_source === "network_site") n.network_site++;
+    if (s.price_source === "dcfctracker") n.dcfctracker++;
     if (s.open_to_non_tesla === false) n.tesla_only++;
   }
   return byNetwork;
@@ -56,6 +58,19 @@ async function main() {
   const ionnaSites = await fetchIonnaSites();
   const ionnaMatched = applyIonnaPrices(stations, ionnaSites, today);
   console.log(`IONNA locator: ${ionnaSites.length} sites, ${ionnaMatched} NREL stations matched`);
+  const before = summarize(stations);
+  if (process.env.DCFC_DISABLE !== "1") {
+    const dcfc = await collectDcfc({
+      cachePath: process.env.DCFC_CACHE ?? "data/dcfc/details.json",
+      today,
+      detailLimit: Number(process.env.DCFC_DETAIL_LIMIT ?? 500),
+      delayMs: Number(process.env.DCFC_DELAY_MS ?? 2000),
+      states: process.env.DCFC_STATES ? process.env.DCFC_STATES.split(",") : undefined,
+    });
+    const r = applyDcfc(stations, dcfc.headlines, dcfc.cache, today);
+    console.log(`DCFC Tracker: ${dcfc.pages} pages, ${dcfc.headlines.size} sites, ${Object.keys(dcfc.cache.details).length} detailed, ${r.matched} matched (${r.by_id} by id, ${r.by_coords} by location)`);
+    if (process.env.COVERAGE_OUT) await writeFile(process.env.COVERAGE_OUT, JSON.stringify({ before, after: summarize(stations) }, null, 2));
+  }
   stations.sort((a, b) => a.state.localeCompare(b.state) || a.nrel_id - b.nrel_id);
 
   await mkdir(join(OUT, "states"), { recursive: true });
@@ -71,6 +86,7 @@ async function main() {
     sources: {
       stations: "NREL Alternative Fuels Data Center (developer.nlr.gov), public DC fast stations",
       network_sites: [IONNA_LOCATOR_URL],
+      dcfctracker: `${DCFC_BASE} (collected once daily with the site owner's permission)`,
       published_tariffs: [...new Set(PUBLISHED_TARIFFS.map((t) => t.source_url))],
     },
   };

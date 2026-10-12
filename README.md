@@ -51,7 +51,7 @@ The feed refreshes every day at 09:17 UTC and can be run manually from the Actio
   ],
   "free": false,
   "currency": "USD",
-  "price_source": "published",      // "nrel" | "published" | "network_site" | "none"
+  "price_source": "published",      // "nrel" | "published" | "network_site" | "dcfctracker" | "none"
   "price_note": "...",
   "pricing_text": null,             // original NREL pricing text
   "source_url": "https://...",
@@ -69,6 +69,7 @@ the final word.
 | Source | How it is used |
 | --- | --- |
 | [NREL Alternative Fuels Data Center](https://developer.nlr.gov/docs/transportation/alt-fuel-stations-v1/) | All public DC fast stations, ports, connectors, power, hours, access notes and station-level pricing text. Official open data API. |
+| [DCFC Tracker](https://dcfctracker.com) | Per-station prices (guest and member rates, per-minute, session and idle fees, time of day, source date). Collected with the site owner's permission, once per daily run: state pages for current prices plus a capped, rotating set of station pages for full tariffs (cached in `data/dcfc/`). Matched by NREL id, else location within 150 m and network. Highest priority, except where a network's own posted price is as new or newer. Tesla stays at the non-member rate. |
 | [IONNA station locator](https://www.ionna.com/rechargeries/find-a-rechargery/) | Per-station price posted on the public locator, fetched once per run (honours robots.txt crawl-delay) and matched to NREL stations within 150 m. Overrides NREL text for IONNA. |
 | [IONNA pricing](https://www.ionna.com/blog/public-ev-charging-prices/) | Published network-wide maximum of $0.39/kWh, fallback for IONNA stations not matched on the locator. |
 | [Mercedes-Benz HPC Power Hours](https://mercedesbenzhpc.com/power-hours/) | Published off-peak rates and hours per location. |
@@ -85,6 +86,8 @@ NREL_API_KEY=your_key npm run build-feed   # writes public/ and data/history/
 ```
 
 Get a free key at [developer.nlr.gov/signup](https://developer.nlr.gov/signup/).
+
+DCFC Tracker options: `DCFC_DETAIL_LIMIT` (station pages per run, default 500), `DCFC_DELAY_MS` (pause between requests, default 2000), `DCFC_STATES` (comma list, for testing) and `DCFC_DISABLE=1` to skip it.
 
 ## Setup (one time)
 
