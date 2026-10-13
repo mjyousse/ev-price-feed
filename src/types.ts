@@ -48,4 +48,10 @@ export interface Station extends Pricing {
   last_confirmed: string | null;
   pricing_text: string | null;
   fetched_at: string;
+  /** When this feed last refreshed the station (ISO, UTC) */
+  checked_at: string;
+  /** Date the source (DCFC Tracker or the network) last updated the price, YYYY-MM-DD */
+  price_updated: string | null;
+  /** Date this feed's history first saw the current price, YYYY-MM-DD */
+  price_changed_at: string | null;
 }

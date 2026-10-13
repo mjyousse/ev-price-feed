@@ -2,7 +2,9 @@ name: Update feed
 
 on:
   schedule:
-    - cron: "17 9 * * *"
+    # 1:00 AM America/Chicago all year: 06:00 UTC during CDT, 07:00 UTC during CST.
+    - cron: "0 6 * * *"
+    - cron: "0 7 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,8 +17,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  gate:
     runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.hour.outputs.run }}
+    steps:
+      - id: hour
+        run: |
+          h=$(TZ=America/Chicago date +%H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$h" = "01" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Chicago hour is $h, not 01; skipping this trigger."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

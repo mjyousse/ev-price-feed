@@ -28,3 +28,16 @@ export function diffSnapshots(days: { date: string; snap: Snapshot }[]): PriceCh
   }
   return changes;
 }
+
+/** Date each station's current price_per_kwh was first seen, from dated snapshots (ascending). */
+export function priceChangedAt(days: { date: string; snap: Snapshot }[]): Map<string, string> {
+  const last = new Map<string, number | null>();
+  const since = new Map<string, string>();
+  for (const d of days) {
+    for (const [ref, v] of Object.entries(d.snap)) {
+      if (!last.has(ref) || last.get(ref) !== v[0]) since.set(ref, d.date);
+      last.set(ref, v[0]);
+    }
+  }
+  return since;
+}

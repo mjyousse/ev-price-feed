@@ -64,6 +64,12 @@ Prices are what the network or station operator has published and may not includ
 tax, session or idle fees unless listed. The charger screen or network app is always
 the final word.
 
+## Station list and timing
+
+The station list mirrors [DCFC Tracker](https://dcfctracker.com) (collected with the site owner's permission, once daily at 1:00 AM Central). Stations DCFC Tracker lists that NREL does not are added from DCFC Tracker's station pages; stations it stops listing leave the feed and are kept in `history/removed.json` with the date. If a run gets fewer than 80% of the previous day's stations, nothing is removed that run. NREL still supplies connectors, hours and Tesla access.
+
+Each station carries `checked_at` (when this feed last refreshed it), `price_updated` (the source's own price date) and `price_changed_at` (when this feed first saw the current price). `meta.json` has `generated_at` (UTC), `generated_at_local` (Central) and a `mirror` block with the DCFC total and the stations added and removed that run.
+
 ## Sources
 
 | Source | How it is used |

@@ -1,10 +1,12 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { toStation, type NrelStation } from "./transform.ts";
-import { snapshot, diffSnapshots, type Snapshot } from "./history.ts";
+import { snapshot, diffSnapshots, priceChangedAt, type Snapshot } from "./history.ts";
+import { centralIso } from "./time.ts";
+import { buildMirror, type Registry } from "./mirror.ts";
 import { PUBLISHED_TARIFFS } from "./tariffs.ts";
-import { applyDcfc, collectDcfc, DCFC_BASE } from "./dcfctracker.ts";
+import { applyDcfc, collectDcfc, saveCache, DCFC_BASE } from "./dcfctracker.ts";
 import { applyIonnaPrices, fetchIonnaSites, IONNA_LOCATOR_URL } from "./ionna.ts";
 import type { Station } from "./types.ts";
 
@@ -52,39 +54,69 @@ async function main() {
   const key = process.env.NREL_API_KEY || "DEMO_KEY";
   if (key === "DEMO_KEY") console.warn("NREL_API_KEY not set; using DEMO_KEY (heavily rate limited).");
   const fetchedAt = new Date().toISOString();
-  const today = fetchedAt.slice(0, 10);
+  const today = centralIso(new Date(fetchedAt)).slice(0, 10);
   const raw = await fetchNrel(key);
-  const stations = raw.filter((s) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude)).map((s) => toStation(s, fetchedAt));
-  const ionnaSites = await fetchIonnaSites();
-  const ionnaMatched = applyIonnaPrices(stations, ionnaSites, today);
-  console.log(`IONNA locator: ${ionnaSites.length} sites, ${ionnaMatched} NREL stations matched`);
-  const before = summarize(stations);
+  const nrel = raw.filter((s) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude)).map((s) => toStation(s, fetchedAt));
+  let stations = nrel;
+  let mirror: { dcfc_total: number; added: number; removed: number; beyond_nrel: number; missing_place: number; guard_tripped: boolean } | null = null;
+  const before = summarize(nrel);
   if (process.env.DCFC_DISABLE !== "1") {
+    const cachePath = process.env.DCFC_CACHE ?? "data/dcfc/details.json";
+    const registryPath = process.env.DCFC_REGISTRY ?? "data/dcfc/stations.json";
+    const prev: Registry = existsSync(registryPath) ? JSON.parse(await readFile(registryPath, "utf8")) : { date: null, ids: [], removed: {} };
     const dcfc = await collectDcfc({
-      cachePath: process.env.DCFC_CACHE ?? "data/dcfc/details.json",
-      today,
+      cachePath, today,
       detailLimit: Number(process.env.DCFC_DETAIL_LIMIT ?? 500),
+      maxDetail: Number(process.env.DCFC_MAX_DETAIL ?? 3000),
       delayMs: Number(process.env.DCFC_DELAY_MS ?? 2000),
       states: process.env.DCFC_STATES ? process.env.DCFC_STATES.split(",") : undefined,
+      knownIds: new Set(nrel.map((s) => s.nrel_id)),
     });
+    const m = buildMirror(nrel, dcfc.headlines, dcfc.cache, prev, today, fetchedAt);
+    if (m.guard_tripped) console.warn(`DCFC Tracker returned ${dcfc.headlines.size} sites vs ${prev.ids.length} last run; keeping the previous set, nothing removed.`);
+    else for (const id of Object.keys(dcfc.cache.details)) if (!dcfc.headlines.has(Number(id))) delete dcfc.cache.details[id];
+    stations = m.stations;
+    const ionnaSites = await fetchIonnaSites();
+    const ionnaMatched = applyIonnaPrices(stations, ionnaSites, today);
+    console.log(`IONNA locator: ${ionnaSites.length} sites, ${ionnaMatched} stations matched`);
     const r = applyDcfc(stations, dcfc.headlines, dcfc.cache, today);
-    console.log(`DCFC Tracker: ${dcfc.pages} pages, ${dcfc.headlines.size} sites, ${Object.keys(dcfc.cache.details).length} detailed, ${r.matched} matched (${r.by_id} by id, ${r.by_coords} by location)`);
-    if (process.env.COVERAGE_OUT) await writeFile(process.env.COVERAGE_OUT, JSON.stringify({ before, after: summarize(stations) }, null, 2));
+    await saveCache(cachePath, dcfc.cache);
+    await mkdir(dirname(registryPath), { recursive: true });
+    await writeFile(registryPath, JSON.stringify(m.registry));
+    await mkdir(HISTORY, { recursive: true });
+    await writeFile(join(HISTORY, "removed.json"), JSON.stringify(m.registry.removed));
+    mirror = { dcfc_total: dcfc.headlines.size, added: m.added.length, removed: m.removed.length, beyond_nrel: m.beyond_nrel, missing_place: m.missing_place, guard_tripped: m.guard_tripped };
+    console.log(`DCFC Tracker: ${dcfc.pages} pages, ${dcfc.headlines.size} sites, ${stations.length} in feed (${m.beyond_nrel} beyond NREL, ${m.missing_place} awaiting a station page), +${m.added.length} / -${m.removed.length}, ${r.matched} priced`);
+  } else {
+    const ionnaSites = await fetchIonnaSites();
+    applyIonnaPrices(stations, ionnaSites, today);
   }
+  for (const s of stations) { s.checked_at = fetchedAt; s.price_updated = s.price_source === "none" ? null : s.verified_on; }
+  if (process.env.COVERAGE_OUT) await writeFile(process.env.COVERAGE_OUT, JSON.stringify({ before, after: summarize(stations), mirror }, null, 2));
   stations.sort((a, b) => a.state.localeCompare(b.state) || a.nrel_id - b.nrel_id);
 
   await mkdir(join(OUT, "states"), { recursive: true });
   await mkdir(join(OUT, "history"), { recursive: true });
   await mkdir(HISTORY, { recursive: true });
 
+  const snap = snapshot(stations);
+  await writeFile(join(HISTORY, `${today}.json`), JSON.stringify(snap));
+  const days = await loadHistory();
+  const changes = diffSnapshots(days);
+  const since = priceChangedAt(days);
+  for (const s of stations) s.price_changed_at = s.price_source === "none" ? null : since.get(s.station_ref) ?? today;
+
   const meta = {
     schema_version: SCHEMA_VERSION,
     generated_at: fetchedAt,
+    generated_at_local: centralIso(new Date(fetchedAt)),
+    timezone: "America/Chicago",
+    mirror,
     station_count: stations.length,
     priced_count: stations.filter((s) => s.price_source !== "none").length,
     networks: summarize(stations),
     sources: {
-      stations: "NREL Alternative Fuels Data Center (developer.nlr.gov), public DC fast stations",
+      stations: "Station list mirrors dcfctracker.com; NREL Alternative Fuels Data Center (developer.nlr.gov) adds connectors, hours and Tesla access",
       network_sites: [IONNA_LOCATOR_URL],
       dcfctracker: `${DCFC_BASE} (collected once daily with the site owner's permission)`,
       published_tariffs: [...new Set(PUBLISHED_TARIFFS.map((t) => t.source_url))],
@@ -98,11 +130,8 @@ async function main() {
   }
   await writeFile(join(OUT, "meta.json"), JSON.stringify({ ...meta, states: states.sort() }, null, 2));
 
-  const snap = snapshot(stations);
-  await writeFile(join(HISTORY, `${today}.json`), JSON.stringify(snap));
-  const days = await loadHistory();
-  const changes = diffSnapshots(days);
   for (const d of days) await writeFile(join(OUT, "history", `${d.date}.json`), JSON.stringify(d.snap));
+  if (existsSync(join(HISTORY, "removed.json"))) await writeFile(join(OUT, "history", "removed.json"), await readFile(join(HISTORY, "removed.json"), "utf8"));
   await writeFile(join(OUT, "history", "index.json"), JSON.stringify({ dates: days.map((d) => d.date), changes }));
   await writeFile(join(OUT, "index.html"), `<!doctype html><meta charset="utf-8"><title>EV Price Feed</title><h1>EV Price Feed</h1><p>Generated ${fetchedAt}. ${meta.station_count} stations, ${meta.priced_count} with prices.</p><ul><li><a href="prices.json">prices.json</a></li><li><a href="meta.json">meta.json</a></li><li><a href="history/index.json">history/index.json</a></li></ul>`);
 

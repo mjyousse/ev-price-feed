@@ -72,6 +72,9 @@ export function toStation(s: NrelStation, fetchedAt: string, tariffs: PublishedT
     last_confirmed: s.date_last_confirmed,
     pricing_text: s.ev_pricing,
     fetched_at: fetchedAt,
+    checked_at: fetchedAt,
+    price_updated: null as string | null,
+    price_changed_at: null as string | null,
     currency: "USD" as const,
     member_price: null,
   };

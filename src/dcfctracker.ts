@@ -15,7 +15,7 @@ export const DCFC_BASE = "https://dcfctracker.com";
 const USER_AGENT = "ev-price-feed/0.1 (+https://github.com/mjyousse/ev-price-feed; once daily, with site owner permission)";
 export const STATES = ["al","ak","az","ar","ca","co","ct","de","dc","fl","ga","hi","id","il","in","ia","ks","ky","la","me","md","ma","mi","mn","ms","mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok","or","pa","ri","sc","sd","tn","tx","ut","vt","va","wa","wv","wi","wy","pr"];
 
-export interface Headline { network: string | null; price_per_kwh: number | null; per_minute: number | null; free: boolean; text: string | null }
+export interface Headline { network: string | null; price_per_kwh: number | null; per_minute: number | null; free: boolean; text: string | null; state?: string }
 
 export interface DcfcTariff {
   per_kwh: number | null;
@@ -39,6 +39,33 @@ export interface DcfcDetail {
   guest: DcfcTariff;
   member: DcfcTariff | null;
   member_label: string | null;
+  /** Site facts from the page's EvChargingStation data, used for stations NREL does not list. */
+  place?: DcfcPlace | null;
+}
+
+export interface DcfcPlace { name: string; address: string; city: string; state: string; zip: string; open_date: string | null; stalls: number; max_kw: number | null; connectors: string[] }
+
+export function parsePlace(html: string): DcfcPlace | null {
+  for (const m of html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) {
+    let j: Record<string, any>;
+    try { j = JSON.parse(m[1]); } catch { continue; }
+    if (j["@type"] !== "EvChargingStation") continue;
+    const a = j.address ?? {};
+    let stalls = 0, maxKw: number | null = null;
+    const connectors: string[] = [];
+    for (const f of j.amenityFeature ?? []) {
+      const name = String(f.name ?? ""), v = Number(f.value);
+      const c = name.match(/^(.+?) Stalls$/);
+      if (c && Number.isFinite(v)) { stalls += v; connectors.push(c[1]); }
+      if (/max power/i.test(name) && Number.isFinite(v)) maxKw = v;
+    }
+    return {
+      name: String(j.name ?? ""), address: String(a.streetAddress ?? ""), city: String(a.addressLocality ?? ""),
+      state: String(a.addressRegion ?? ""), zip: String(a.postalCode ?? ""), open_date: j.openingDate ?? null,
+      stalls, max_kw: maxKw, connectors,
+    };
+  }
+  return null;
 }
 
 const text = (s: string) =>
@@ -164,7 +191,7 @@ export function parseStationPage(html: string, id: number, fetchedOn: string): D
   return {
     id, fetched_on: fetchedOn, network: network || null, source, source_date: parseDate(source),
     lat: ll ? Number(ll[1]) : null, lon: ll ? Number(ll[2]) : null,
-    guest, member, member_label: memberLabel,
+    guest, member, member_label: memberLabel, place: parsePlace(html),
   };
 }
 
@@ -181,17 +208,22 @@ export async function saveCache(path: string, cache: DcfcCache) {
 }
 
 /** Which station pages to refresh today: headline changed or never fetched first, then the oldest. */
-export function pickDetailIds(headlines: Map<number, Headline>, cache: DcfcCache, limit: number): number[] {
-  const changed: number[] = [], missing: number[] = [], rest: [number, string][] = [];
+/**
+ * Which station pages to refresh today. Stations NREL does not list and that have no cached page come
+ * first (their page is the only source of coordinates), then changed headlines, never-fetched, oldest.
+ */
+export function pickDetailIds(headlines: Map<number, Headline>, cache: DcfcCache, limit: number, knownIds: Set<number> = new Set()): number[] {
+  const fresh: number[] = [], changed: number[] = [], missing: number[] = [], rest: [number, string][] = [];
   for (const [id, h] of headlines) {
-    if (h.price_per_kwh === null && h.per_minute === null && !h.free) continue;
+    if (!knownIds.has(id) && knownIds.size && !cache.details[id]?.place) { fresh.push(id); continue; }
     const d = cache.details[id];
+    if (h.price_per_kwh === null && h.per_minute === null && !h.free) continue;
     if (!d) missing.push(id);
     else if ((d.guest.per_kwh ?? null) !== h.price_per_kwh && h.price_per_kwh !== null) changed.push(id);
     else rest.push([id, d.fetched_on]);
   }
   rest.sort((a, b) => a[1].localeCompare(b[1]) || a[0] - b[0]);
-  return [...changed, ...missing, ...rest.map((r) => r[0])].slice(0, limit);
+  return [...fresh, ...changed, ...missing, ...rest.map((r) => r[0])].slice(0, limit + fresh.length);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -210,20 +242,20 @@ async function get(url: string): Promise<string> {
 
 export interface DcfcResult { headlines: Map<number, Headline>; cache: DcfcCache; pages: number }
 
-export async function collectDcfc(opts: { cachePath: string; today: string; detailLimit: number; delayMs: number; states?: string[] }): Promise<DcfcResult> {
+export async function collectDcfc(opts: { cachePath: string; today: string; detailLimit: number; delayMs: number; states?: string[]; knownIds?: Set<number>; maxDetail?: number }): Promise<DcfcResult> {
   const cache = await loadCache(opts.cachePath);
   const headlines = new Map<number, Headline>();
   let pages = 0;
   for (const st of opts.states ?? STATES) {
     try {
-      for (const [id, h] of parseStatePage(await get(`${DCFC_BASE}/states/${st}`))) headlines.set(id, h);
+      for (const [id, h] of parseStatePage(await get(`${DCFC_BASE}/states/${st}`))) headlines.set(id, { ...h, state: st.toUpperCase() });
     } catch (e) {
       console.warn(`DCFC Tracker state ${st}: ${(e as Error).message}`);
     }
     pages++;
     await sleep(opts.delayMs);
   }
-  for (const id of pickDetailIds(headlines, cache, opts.detailLimit)) {
+  for (const id of pickDetailIds(headlines, cache, opts.detailLimit, opts.knownIds).slice(0, opts.maxDetail ?? 3000)) {
     try {
       cache.details[id] = parseStationPage(await get(`${DCFC_BASE}/stations/${id}`), id, opts.today);
     } catch (e) {
@@ -232,7 +264,6 @@ export async function collectDcfc(opts: { cachePath: string; today: string; deta
     pages++;
     await sleep(opts.delayMs);
   }
-  for (const id of Object.keys(cache.details)) if (!headlines.has(Number(id)) && headlines.size > 1000) delete cache.details[id];
   await saveCache(opts.cachePath, cache);
   return { headlines, cache, pages };
 }
